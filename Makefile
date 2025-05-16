@@ -1,4 +1,4 @@
-.PHONY: all build test clean run stop help patch rebuild
+.PHONY: all build test clean run stop help patch update-dockerfiles rebuild
 
 # Variables
 SERVICES = amf smf ocs upf bss udm
@@ -11,11 +11,17 @@ all: build
 # Patch Go modules
 patch:
 	@echo "🔧 Patching Go modules..."
-	@chmod +x patch_modules.sh
-	@./patch_modules.sh
+	@chmod +x patch_all.sh
+	@./patch_all.sh
+
+# Update Dockerfiles
+update-dockerfiles:
+	@echo "🔧 Updating Dockerfiles..."
+	@chmod +x update_dockerfiles.sh
+	@./update_dockerfiles.sh
 
 # Rebuild all services
-rebuild: patch
+rebuild: patch update-dockerfiles
 	@echo "🏗️ Rebuilding all services..."
 	$(DOCKER_COMPOSE) build --no-cache
 
@@ -75,14 +81,15 @@ init-redis:
 # Show help
 help:
 	@echo "Available targets:"
-	@echo "  all            - Build all services (default)"
-	@echo "  build          - Build all services"
-	@echo "  patch          - Patch Go modules and update dependencies"
-	@echo "  rebuild        - Patch modules and rebuild all services"
-	@echo "  test           - Run tests"
-	@echo "  test-coverage  - Run tests with coverage"
-	@echo "  run            - Start all services"
-	@echo "  stop           - Stop all services"
-	@echo "  clean          - Clean up"
-	@echo "  init-redis     - Initialize Redis with test data"
-	@echo "  help           - Show this help message" 
+	@echo "  all              - Build all services (default)"
+	@echo "  build            - Build all services"
+	@echo "  patch            - Patch Go modules and update dependencies"
+	@echo "  update-dockerfiles - Update all Dockerfiles to template"
+	@echo "  rebuild          - Patch modules, update Dockerfiles, and rebuild all services"
+	@echo "  test             - Run tests"
+	@echo "  test-coverage    - Run tests with coverage"
+	@echo "  run              - Start all services"
+	@echo "  stop             - Stop all services"
+	@echo "  clean            - Clean up"
+	@echo "  init-redis       - Initialize Redis with test data"
+	@echo "  help             - Show this help message" 
