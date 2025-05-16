@@ -1,0 +1,67 @@
+# SMF Service Configuration
+
+# Service settings
+service:
+  name: smf
+  version: 0.1.0
+  environment: development  # development, staging, production
+
+# Network interfaces
+interfaces:
+  gtpc:
+    ip: 0.0.0.0
+    port: 8805
+  pfcp:
+    ip: 0.0.0.0
+    port: 8806
+  n4:
+    ip: 0.0.0.0
+    port: 8805
+
+# UPF configuration
+upf:
+  - id: upf1
+    ip: upf
+    port: 8805
+    dnn: internet
+    slice:
+      sst: 1
+      sd: 000001
+
+# Database settings
+database:
+  redis:
+    addr: ${REDIS_ADDR:-localhost:6379}
+    db: 0
+    pool_size: 10
+  postgres:
+    dsn: ${POSTGRES_DSN:-postgres://openmv:openmv@localhost:5432/openmv?sslmode=disable}
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime: 1h
+
+# Logging
+logging:
+  level: debug  # debug, info, warn, error
+  format: json  # json, text
+  output: stdout  # stdout, file
+  file: logs/smf.log  # Only used if output is file
+
+# Metrics
+metrics:
+  enabled: true
+  port: 9090
+  path: /metrics
+
+# Tracing
+tracing:
+  enabled: false
+  endpoint: localhost:4317
+  service_name: smf
+
+# Feature flags
+features:
+  pfcp_heartbeat: true
+  session_cleanup: true
+  dynamic_upf_selection: false
+  load_balancing: false 
