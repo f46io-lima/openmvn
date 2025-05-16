@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/ishidawataru/sctp"
+	"github.com/nats-io/nats.go"
 )
 
 // NGAP message types
@@ -154,17 +155,26 @@ func main() {
 	}
 	log.Println("[AMF] Listening on SCTP port 38412")
 
+	// Connect to NATS
+	nc, err := nats.Connect("nats://nats:4222")
+	if err != nil {
+		log.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	publisher := NewPublisher(nc)
+
 	for {
 		conn, err := l.AcceptSCTP()
 		if err != nil {
 			log.Printf("[AMF] SCTP accept error: %v", err)
 			continue
 		}
-		go handleNGAP(conn)
+		go handleNGAP(conn, publisher)
 	}
 }
 
-func handleNGAP(conn *sctp.SCTPConn) {
+func handleNGAP(conn *sctp.SCTPConn, publisher *Publisher) {
 	defer conn.Close()
 	peer := conn.RemoteAddr().String()
 	log.Printf("[AMF] New connection from %s", peer)
@@ -226,6 +236,7 @@ func handleNGAP(conn *sctp.SCTPConn) {
 
 		if authPassed {
 			log.Printf("[AMF] UE %d (IMSI %s) authenticated ✅", msg.UEID, msg.NASMsg.IMSI)
+			publisher.PublishUERegistered(fmt.Sprint(msg.UEID), msg.NASMsg.IMSI)
 		} else {
 			log.Printf("[AMF] UE %d (IMSI %s) failed auth ❌", msg.UEID, msg.NASMsg.IMSI)
 		}

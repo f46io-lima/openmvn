@@ -1,96 +1,75 @@
-.PHONY: all build clean test run-amf run-smf run-upf run-bss run-ocs run-udm proto api-docs
+.PHONY: all build test clean run stop help
 
-# Build variables
-BINARY_DIR := bin
-SERVICES := amf smf upf bss ocs udm
-
-# Go variables
-GO := go
-GOFMT := gofmt
-GOLINT := golangci-lint
-GOTEST := $(GO) test
-GOBUILD := $(GO) build
+# Variables
+SERVICES = amf smf ocs upf bss
+DOCKER_COMPOSE = docker-compose
+GO = go
 
 # Default target
-all: clean build
-
-# Create binary directory
-$(BINARY_DIR):
-	mkdir -p $(BINARY_DIR)
+all: build
 
 # Build all services
-build: $(BINARY_DIR)
+build:
+	@echo "Building all services..."
 	@for service in $(SERVICES); do \
 		echo "Building $$service..."; \
-		$(GOBUILD) -o $(BINARY_DIR)/$$service ./cmd/$$service; \
+		cd $$service && $(GO) mod tidy && cd ..; \
 	done
-
-# Clean build artifacts
-clean:
-	rm -rf $(BINARY_DIR)
-	$(GO) clean
+	$(DOCKER_COMPOSE) build
 
 # Run tests
 test:
-	$(GOTEST) -v ./...
+	@echo "Running tests..."
+	@for service in $(SERVICES); do \
+		echo "Testing $$service..."; \
+		cd $$service && $(GO) test -v ./... && cd ..; \
+	done
 
-# Run individual services
-run-amf: build
-	$(BINARY_DIR)/amf
+# Run tests with coverage
+test-coverage:
+	@echo "Running tests with coverage..."
+	@for service in $(SERVICES); do \
+		echo "Testing $$service with coverage..."; \
+		cd $$service && $(GO) test -v -coverprofile=coverage.out ./... && \
+		$(GO) tool cover -html=coverage.out -o coverage.html && cd ..; \
+	done
 
-run-smf: build
-	$(BINARY_DIR)/smf
+# Start all services
+run:
+	@echo "Starting all services..."
+	$(DOCKER_COMPOSE) up -d
 
-run-upf: build
-	$(BINARY_DIR)/upf
+# Stop all services
+stop:
+	@echo "Stopping all services..."
+	$(DOCKER_COMPOSE) down
 
-run-bss: build
-	$(BINARY_DIR)/bss
+# Clean up
+clean:
+	@echo "Cleaning up..."
+	$(DOCKER_COMPOSE) down -v
+	@for service in $(SERVICES); do \
+		rm -f $$service/coverage.out $$service/coverage.html; \
+	done
 
-run-ocs: build
-	$(BINARY_DIR)/ocs
+# Initialize Redis with test data
+init-redis:
+	@echo "Initializing Redis with test data..."
+	@redis-cli -h localhost -p 6379 flushall
+	@redis-cli -h localhost -p 6379 hset "quota:001010123456789" "remaining" 1000 "updated" $$(date +%s)
+	@redis-cli -h localhost -p 6379 set "ue:001010123456789" '{"imsi":"001010123456789","ip":"192.168.1.100","created":"2024-01-01T00:00:00Z","last_seen":"2024-01-01T00:00:00Z"}'
+	@redis-cli -h localhost -p 6379 set "session:001010123456789" '{"ue_id":"001010123456789","teid":305419896,"ue_ip":"192.168.1.100","created":"2024-01-01T00:00:00Z","state":"active"}'
+	@redis-cli -h localhost -p 6379 set "pfcp:305419896" '{"teid":305419896,"ue_ip":"192.168.1.100","created":"2024-01-01T00:00:00Z","state":"active","seid":1311768467294899695,"qfi":1,"priority":255}'
 
-run-udm: build
-	$(BINARY_DIR)/udm
-
-# Format code
-fmt:
-	$(GOFMT) -w ./...
-
-# Run linter
-lint:
-	$(GOLINT) run ./...
-
-# Generate protobuf code
-proto:
-	protoc --go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		./api/proto/*.proto
-
-# Generate API documentation
-api-docs:
-	@echo "Generating OpenAPI documentation..."
-	# TODO: Add swagger generation commands
-
-# Development environment
-dev: build
-	docker-compose up -d
-
-# Stop development environment
-dev-stop:
-	docker-compose down
-
-# Help target
+# Show help
 help:
 	@echo "Available targets:"
-	@echo "  all        - Clean and build all services"
-	@echo "  build      - Build all services"
-	@echo "  clean      - Remove build artifacts"
-	@echo "  test       - Run tests"
-	@echo "  run-*      - Run individual services (amf, smf, upf, bss, ocs, udm)"
-	@echo "  fmt        - Format code"
-	@echo "  lint       - Run linter"
-	@echo "  proto      - Generate protobuf code"
-	@echo "  api-docs   - Generate API documentation"
-	@echo "  dev        - Start development environment"
-	@echo "  dev-stop   - Stop development environment" 
+	@echo "  all            - Build all services (default)"
+	@echo "  build          - Build all services"
+	@echo "  test           - Run tests"
+	@echo "  test-coverage  - Run tests with coverage"
+	@echo "  run            - Start all services"
+	@echo "  stop           - Stop all services"
+	@echo "  clean          - Clean up"
+	@echo "  init-redis     - Initialize Redis with test data"
+	@echo "  help           - Show this help message" 

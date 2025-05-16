@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
+	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -45,6 +47,18 @@ var (
 	balanceLock sync.RWMutex
 )
 
+// Initialize Redis
+var RedisClient *redis.Client
+var RedisCtx = context.Background()
+
+func InitRedis() {
+	RedisClient = redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+}
+
 func main() {
 	// Configure logging
 	log.SetFormatter(&logrus.JSONFormatter{})
@@ -62,6 +76,32 @@ func main() {
 	r.HandleFunc("/quota", quotaHandler).Methods("POST")
 	r.HandleFunc("/balance/{imsi}", getBalanceHandler).Methods("GET")
 	r.HandleFunc("/health", healthHandler).Methods("GET")
+
+	// Connect to NATS
+	nc, err := nats.Connect("nats://nats:4222")
+	if err != nil {
+		log.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("Failed to get JetStream context: %v", err)
+	}
+
+	publisher := NewPublisher(nc)
+
+	// Subscribe to PFCP session events
+	_, err = js.Subscribe("pfcp.session.created", func(m *nats.Msg) {
+		log.Printf("[OCS] Session started: %s", string(m.Data))
+		// TODO: Deduct quota if needed
+	})
+	if err != nil {
+		log.Printf("Failed to subscribe to pfcp.session.created: %v", err)
+	}
+
+	// Initialize Redis
+	InitRedis()
 
 	// Create server with timeouts
 	srv := &http.Server{
@@ -147,6 +187,14 @@ func quotaHandler(w http.ResponseWriter, r *http.Request) {
 		"remaining": sub.Balance,
 	}).Info("Quota approved and deducted")
 
+	publisher.PublishQuotaDeducted(req.IMSI, req.MB, sub.Balance)
+
+	// After quota deduction
+	err = RedisClient.HSet(RedisCtx, "quota:"+req.IMSI, "remaining", sub.Balance).Err()
+	if err != nil {
+		log.Printf("Failed to store quota in Redis: %v", err)
+	}
+
 	json.NewEncoder(w).Encode(QuotaResponse{
 		Approved: true,
 		Balance:  sub.Balance,
@@ -197,4 +245,4 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
-} 
+}

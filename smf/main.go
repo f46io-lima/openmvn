@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog"
 	"github.com/go-redis/redis/v8"
+	"github.com/nats-io/nats.go"
 	"github.com/spf13/viper"
 	"github.com/wmnsk/go-gtp/gtpv2"
 	gtpie "github.com/wmnsk/go-gtp/gtpv2/ie"
@@ -155,6 +158,29 @@ func main() {
 	}
 	defer pfcpClient.conn.Close()
 
+	// Connect to NATS
+	nc, err := nats.Connect("nats://nats:4222")
+	if err != nil {
+		log.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("Failed to get JetStream context: %v", err)
+	}
+
+	publisher := NewPublisher(nc)
+
+	// Subscribe to UE registration events
+	_, err = js.Subscribe("ue.registered", func(m *nats.Msg) {
+		log.Printf("[SMF] New UE Registered: %s", string(m.Data))
+		// TODO: Parse and prebuild session if needed
+	})
+	if err != nil {
+		log.Printf("Failed to subscribe to ue.registered: %v", err)
+	}
+
 	// Initialize router
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -232,6 +258,21 @@ func main() {
 			if _, err := w.Write(respBuf); err != nil {
 				logger.Error().Err(err).Msg("Failed to write response")
 			}
+
+			publisher.PublishPFCPCreated("sess-"+imsi, teid, ueIP)
+
+			// After session creation
+			sessionJSON, err := json.Marshal(session)
+			if err != nil {
+				log.Printf("Failed to marshal session: %v", err)
+			} else {
+				// Store session in Redis with 30 minute expiry
+				err = RedisClient.Set(RedisCtx, "session:"+imsi, sessionJSON, 30*time.Minute).Err()
+				if err != nil {
+					log.Printf("Failed to store session in Redis: %v", err)
+				}
+			}
+
 			return
 		}
 

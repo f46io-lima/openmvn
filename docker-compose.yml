@@ -14,6 +14,10 @@ services:
       - openmvcore-net
     depends_on:
       - udm
+      - nats
+    environment:
+      - NATS_URL=nats://nats:4222
+      - REDIS_ADDR=redis:6379
 
   smf:
     build:
@@ -28,6 +32,10 @@ services:
     depends_on:
       - upf
       - udm
+      - nats
+    environment:
+      - NATS_URL=nats://nats:4222
+      - REDIS_ADDR=redis:6379
 
   upf:
     build:
@@ -43,6 +51,11 @@ services:
       - /dev/net/tun:/dev/net/tun
     networks:
       - openmvcore-net
+    depends_on:
+      - nats
+    environment:
+      - NATS_URL=nats://nats:4222
+      - REDIS_ADDR=redis:6379
 
   # Support Services
   bss:
@@ -56,8 +69,11 @@ services:
       - openmvcore-net
     depends_on:
       - postgres
+      - nats
     environment:
       - POSTGRES_DSN=postgres://openmv:openmv@postgres:5432/openmv?sslmode=disable
+      - NATS_URL=nats://nats:4222
+      - REDIS_ADDR=redis:6379
 
   ocs:
     build:
@@ -71,6 +87,7 @@ services:
     depends_on:
       - redis
       - postgres
+      - nats
     environment:
       - REDIS_ADDR=redis:6379
       - POSTGRES_DSN=postgres://openmv:openmv@postgres:5432/openmv?sslmode=disable
@@ -112,13 +129,14 @@ services:
 
   # Optional: NATS for service communication
   nats:
-    image: nats:2-alpine
+    image: nats:2.9-alpine
     container_name: openmvcore-nats
     ports:
       - "4222:4222"  # Client connections
       - "8222:8222"  # HTTP monitoring
     networks:
       - openmvcore-net
+    command: ["-js"]
 
 volumes:
   redis_data:

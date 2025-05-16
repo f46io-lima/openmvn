@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -58,6 +59,27 @@ func main() {
 	r.HandleFunc("/topup", topUpHandler).Methods("POST")
 	r.HandleFunc("/subscriber/{imsi}", getSubscriberHandler).Methods("GET")
 	r.HandleFunc("/health", healthHandler).Methods("GET")
+
+	// Connect to NATS
+	nc, err := nats.Connect("nats://nats:4222")
+	if err != nil {
+		log.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("Failed to get JetStream context: %v", err)
+	}
+
+	// Subscribe to UE registration events for logging
+	_, err = js.Subscribe("ue.registered", func(m *nats.Msg) {
+		log.Printf("[BSS] UE registered event: %s", string(m.Data))
+		// TODO: Update billing state if needed
+	})
+	if err != nil {
+		log.Printf("Failed to subscribe to ue.registered: %v", err)
+	}
 
 	// Create server with timeouts
 	srv := &http.Server{
@@ -120,7 +142,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	simDB[sub.IMSI] = &sub
 	log.WithFields(logrus.Fields{
-		"imsi": sub.IMSI,
+		"imsi":    sub.IMSI,
 		"balance": sub.Balance,
 	}).Info("New subscriber registered")
 
@@ -160,8 +182,8 @@ func topUpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.WithFields(logrus.Fields{
-		"imsi": sub.IMSI,
-		"amount": req.Amount,
+		"imsi":        sub.IMSI,
+		"amount":      req.Amount,
 		"new_balance": sub.Balance,
 	}).Info("Balance top-up completed")
 
@@ -196,8 +218,8 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.WithFields(logrus.Fields{
-			"method": r.Method,
-			"path":   r.RequestURI,
+			"method":   r.Method,
+			"path":     r.RequestURI,
 			"duration": time.Since(start),
 		}).Info("Request processed")
 	})
@@ -213,4 +235,4 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
-} 
+}

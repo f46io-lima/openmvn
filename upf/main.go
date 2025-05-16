@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/openmvcore/upf/pkg/upf"
 	"github.com/sirupsen/logrus"
 )
@@ -49,6 +52,27 @@ func main() {
 	upfLogger.Info("[UPF] Initializing...")
 	upfInstance := upf.NewUPF(cfg)
 
+	// Connect to NATS
+	nc, err := nats.Connect("nats://nats:4222")
+	if err != nil {
+		upfLogger.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	if err != nil {
+		upfLogger.Fatalf("Failed to get JetStream context: %v", err)
+	}
+
+	// Subscribe to PFCP session events
+	_, err = js.Subscribe("pfcp.session.created", func(m *nats.Msg) {
+		upfLogger.Printf("[UPF] GTP tunnel created: %s", string(m.Data))
+		// TODO: Update tunnel state if needed
+	})
+	if err != nil {
+		upfLogger.Printf("Failed to subscribe to pfcp.session.created: %v", err)
+	}
+
 	// Handle graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -69,6 +93,9 @@ func main() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	// Initialize Redis
+	InitRedis()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -81,4 +108,22 @@ func main() {
 			upfLogger.Infof("[UPF] Status: %d active sessions", sessions)
 		}
 	}
+}
+
+func handlePFCPMessage(msg *pfcp.Message) {
+	// ... existing code ...
+
+	// After PFCP tunnel creation
+	pfcpJSON, err := json.Marshal(tunnel)
+	if err != nil {
+		log.Printf("Failed to marshal PFCP tunnel: %v", err)
+	} else {
+		// Store PFCP tunnel in Redis with 30 minute expiry
+		err = RedisClient.Set(RedisCtx, "pfcp:"+teid, pfcpJSON, 30*time.Minute).Err()
+		if err != nil {
+			log.Printf("Failed to store PFCP tunnel in Redis: %v", err)
+		}
+	}
+
+	// ... existing code ...
 }

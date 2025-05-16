@@ -7,6 +7,8 @@ variables:
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
+  REDIS_ADDR: redis:6379
+  NATS_URL: nats://nats:4222
 
 stages:
   - build
@@ -14,50 +16,70 @@ stages:
   - push
 
 before_script:
-  - apk add --no-cache make git go bash curl
+  - apk add --no-cache go git curl bash
   - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
 
 build_services:
   stage: build
   script:
-    - echo "[CI] Building all services"
-    - docker-compose -f docker-compose.yml build
+    - docker-compose build
+  artifacts:
+    paths:
+      - ./*/Dockerfile
+      - docker-compose.yml
 
 unit_tests:
   stage: test
+  services:
+    - name: redis:7-alpine
+      alias: redis
+    - name: nats:2.10.11-alpine
+      alias: nats
+      command: ["-js"]
   script:
-    - echo "[CI] Running Go unit tests"
-    - for d in amf smf upf bss udm ocs; do
-        echo "🔧 Testing $d...";
-        cd $d;
+    - for svc in amf smf ocs upf bss; do
+        cd $svc;
         go mod tidy;
-        go test ./...;
+        go test -v ./...;
         cd ..;
       done
+  artifacts:
+    reports:
+      junit: junit-*.xml
+    when: always
 
-health_checks:
+integration_test:
   stage: test
   script:
-    - echo "[CI] Starting services for health checks"
-    - docker-compose -f docker-compose.yml up -d
-    - sleep 10
-    - echo "[CI] Verifying HTTP APIs"
-    - curl -f http://localhost:8081/health
-    - curl -f http://localhost:8082/health
-    - curl -f http://localhost:8083/health
-    - curl -f http://localhost:8084/health
+    - docker-compose up -d redis nats
+    - sleep 5  # Wait for services to start
+    - docker-compose up -d
+    - sleep 10  # Wait for all services to start
+    - |
+      for port in 8081 8082 8083 8084; do
+        echo "Checking health on port $port..."
+        curl -f http://localhost:$port/health || exit 1
+      done
+    - docker-compose logs
   allow_failure: false
-  when: on_success
   after_script:
     - docker-compose down -v
+  artifacts:
+    when: on_failure
+    paths:
+      - docker-compose.log
 
 push_images:
   stage: push
   script:
-    - echo "[CI] Tagging and pushing all service images"
     - |
-      for svc in amf smf upf bss udm ocs; do
-        IMAGE="$CI_REGISTRY_IMAGE/$svc:latest"
-        docker tag openmvcore_${svc} $IMAGE
-        docker push $IMAGE
+      for svc in amf smf ocs upf bss; do
+        echo "Pushing $svc..."
+        docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:latest"
+        docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
+        docker push "$CI_REGISTRY_IMAGE/$svc:latest"
+        docker push "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
       done
+  only:
+    - main
+  when: manual
