@@ -10,7 +10,7 @@ RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
 
 # Download dependencies
-RUN go mod download
+RUN go mod tidy && go mod download
 
 # Copy the rest of the application
 COPY . .
