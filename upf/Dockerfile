@@ -15,8 +15,8 @@ RUN go mod tidy && go mod download
 # Copy the rest of the application
 COPY . .
 
-# Build the application
-RUN go build -v -o upf main.go
+# Build the entire package
+RUN go build -v -o upf .
 
 # Final stage
 FROM alpine:latest
