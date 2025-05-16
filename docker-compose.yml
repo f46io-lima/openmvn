@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # Core Network Services
+  amf:
+    build:
+      context: ./amf
+      dockerfile: Dockerfile
+    container_name: openmvcore-amf
+    ports:
+      - "38412:38412"  # NGAP
+      - "38413:38413"  # SCTP
+    networks:
+      - openmvcore-net
+    depends_on:
+      - udm
+
+  smf:
+    build:
+      context: ./smf
+      dockerfile: Dockerfile
+    container_name: openmvcore-smf
+    ports:
+      - "8080:8080"  # HTTP API
+      - "8805:8805"  # PFCP
+    networks:
+      - openmvcore-net
+    depends_on:
+      - upf
+      - udm
+
+  upf:
+    build:
+      context: ./upf
+      dockerfile: Dockerfile
+    container_name: openmvcore-upf
+    ports:
+      - "8805:8805"  # PFCP
+      - "2152:2152"  # GTP-U
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - openmvcore-net
+
+  # Support Services
+  bss:
+    build:
+      context: ./bss
+      dockerfile: Dockerfile
+    container_name: openmvcore-bss
+    ports:
+      - "8083:8083"  # HTTP API
+    networks:
+      - openmvcore-net
+    depends_on:
+      - postgres
+    environment:
+      - POSTGRES_DSN=postgres://openmv:openmv@postgres:5432/openmv?sslmode=disable
+
+  ocs:
+    build:
+      context: ./ocs
+      dockerfile: Dockerfile
+    container_name: openmvcore-ocs
+    ports:
+      - "8081:8081"  # HTTP API
+    networks:
+      - openmvcore-net
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - REDIS_ADDR=redis:6379
+      - POSTGRES_DSN=postgres://openmv:openmv@postgres:5432/openmv?sslmode=disable
+
+  udm:
+    build:
+      context: ./udm
+      dockerfile: Dockerfile
+    container_name: openmvcore-udm
+    ports:
+      - "8082:8082"  # HTTP API
+    networks:
+      - openmvcore-net
+
+  # Infrastructure Services
+  redis:
+    image: redis:alpine
+    container_name: openmvcore-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - openmvcore-net
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:13-alpine
+    container_name: openmvcore-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=openmv
+      - POSTGRES_PASSWORD=openmv
+      - POSTGRES_DB=openmv
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - openmvcore-net
+
+  # Optional: NATS for service communication
+  nats:
+    image: nats:2-alpine
+    container_name: openmvcore-nats
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP monitoring
+    networks:
+      - openmvcore-net
+
+volumes:
+  redis_data:
+  postgres_data:
+
+networks:
+  openmvcore-net:
+    driver: bridge 
