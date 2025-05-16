@@ -1,12 +1,23 @@
-.PHONY: all build test clean run stop help
+.PHONY: all build test clean run stop help patch rebuild
 
 # Variables
-SERVICES = amf smf ocs upf bss
+SERVICES = amf smf ocs upf bss udm
 DOCKER_COMPOSE = docker-compose
 GO = go
 
 # Default target
 all: build
+
+# Patch Go modules
+patch:
+	@echo "🔧 Patching Go modules..."
+	@chmod +x patch_modules.sh
+	@./patch_modules.sh
+
+# Rebuild all services
+rebuild: patch
+	@echo "🏗️ Rebuilding all services..."
+	$(DOCKER_COMPOSE) build --no-cache
 
 # Build all services
 build:
@@ -66,6 +77,8 @@ help:
 	@echo "Available targets:"
 	@echo "  all            - Build all services (default)"
 	@echo "  build          - Build all services"
+	@echo "  patch          - Patch Go modules and update dependencies"
+	@echo "  rebuild        - Patch modules and rebuild all services"
 	@echo "  test           - Run tests"
 	@echo "  test-coverage  - Run tests with coverage"
 	@echo "  run            - Start all services"
