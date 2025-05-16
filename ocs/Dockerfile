@@ -1,9 +1,9 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.21-alpine as builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install git and certificates
 RUN apk add --no-cache git ca-certificates
 
 # Copy go.mod and go.sum first for better caching
@@ -15,15 +15,15 @@ RUN go mod tidy && go mod download
 # Copy the rest of the application
 COPY . .
 
-# Build the application
-RUN go build -v -o ocs main.go
+# Build the entire package
+RUN go build -v -o ocs .
 
 # Final stage
 FROM alpine:latest
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install certificates and timezone data
 RUN apk add --no-cache ca-certificates tzdata
 
 # Copy the binary from builder

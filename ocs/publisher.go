@@ -13,7 +13,11 @@ type EventPublisher struct {
 }
 
 func NewPublisher(nc *nats.Conn) *EventPublisher {
-	js, _ := nc.JetStream()
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Printf("❌ Failed to get JetStream context: %v", err)
+		return nil
+	}
 	return &EventPublisher{js: js}
 }
 
@@ -46,7 +50,15 @@ func (p *EventPublisher) PublishQuotaDeducted(imsi string, amount, remaining int
 		"remaining": remaining,
 		"timestamp": time.Now(),
 	}
-	p.publish("quota.deducted", event)
+	bytes, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("❌ [Publisher] Marshal error: %v", err)
+		return
+	}
+	_, err = p.js.Publish("quota.deducted", bytes)
+	if err != nil {
+		log.Printf("❌ [Publisher] Failed to publish: %v", err)
+	}
 }
 
 func (p *EventPublisher) publish(subject string, msg any) {
