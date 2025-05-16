@@ -1,0 +1,15 @@
+# Ignore test files
+*_test.go
+test_*.go
+tests/
+
+# Ignore git and editor files
+.git
+.gitignore
+.vscode/
+.idea/
+
+# Ignore local development files
+.env
+*.log
+tmp/ 
