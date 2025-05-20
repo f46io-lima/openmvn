@@ -166,7 +166,7 @@ kaniko_push:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
   after_script:
-    - echo "✅ Push completed for version: $VERSION"
+    - 'echo "✅ Push completed for version: $VERSION"'
   artifacts:
     reports:
       dotenv: build.env
