@@ -1,147 +1,138 @@
-image: docker:24.0.2
-
-services:
-  - name: docker:24.0.2-dind
-    command: ["--tls=false"]
-    alias: docker
+image: gcr.io/kaniko-project/executor:latest
 
 variables:
-  # Use tcp://docker:2376 for TLS or tcp://docker:2375 for non-TLS
-  DOCKER_HOST: tcp://localhost:2375
-  DOCKER_TLS_CERTDIR: ""  # Disable TLS
-  DOCKER_DRIVER: overlay2
-  # Add these to help with DinD setup
   DOCKER_BUILDKIT: 1
-  DOCKER_CLI_EXPERIMENTAL: enabled
-  # Service variables
-  REDIS_ADDR: redis:6379
-  NATS_URL: nats://nats:4222
-  # Use dynamic port for SMF to avoid conflicts
-  SMF_PORT: ${SMF_PORT:-8805}
-  AMF_PORT: 8081
-  OCS_PORT: 8082
-  UDM_PORT: 8083
-  BSS_PORT: 8084
+  CI_BUILD_CONTEXT: $CI_PROJECT_DIR
+  CI_DOCKERFILE: $CI_PROJECT_DIR/Dockerfile
+  # Testcontainers settings
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+  TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/var/run/docker.sock"
 
 stages:
   - build
+  - verify-images
   - test
-  - push
+  - integration-test
 
 before_script:
-  # Install required packages
-  - apk add --no-cache go git curl bash
-  # Generate random port for SMF if not set
-  - |
-    if [ -z "$SMF_PORT" ]; then
-      # Generate a random port between 10000 and 65000
-      export SMF_PORT=$(( (RANDOM % 55000) + 10000 ))
-      echo "Using dynamic SMF port: $SMF_PORT"
-    fi
-  # Wait for Docker daemon to be ready
-  - |
-    for i in $(seq 1 30); do
-      if docker info > /dev/null 2>&1; then
-        break
-      fi
-      echo "Waiting for Docker daemon... attempt $i"
-      sleep 2
-    done
-  # Login to registry only if credentials are available
-  - |
-    if [ -n "$CI_REGISTRY_PASSWORD" ] && [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY" ]; then
-      echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    else
-      echo "Skipping registry login - credentials not available"
-    fi
-  # Cleanup
-  - docker ps -aq | xargs -r docker rm -f || true
-  - docker network prune -f || true
+  - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
 
 build_services:
   stage: build
   script:
-    - docker-compose build
-  artifacts:
-    paths:
-      - ./*/Dockerfile
-      - docker-compose.yml
+    - |
+      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
+        echo "📦 Building and pushing $svc with Kaniko..."
+        /kaniko/executor \
+          --context "$CI_PROJECT_DIR/$svc" \
+          --dockerfile "$CI_PROJECT_DIR/$svc/Dockerfile" \
+          --destination "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA" \
+          --destination "$CI_REGISTRY_IMAGE/$svc:latest" \
+          --cache=true \
+          --cache-ttl=24h \
+          --push-retry=3
+      done
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
+      when: manual
+
+verify_images:
+  stage: verify-images
+  image: docker:24.0.2
+  services:
+    - name: docker:24.0.2-dind
+      alias: docker
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache curl jq
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+  script:
+    - |
+      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
+        echo "🔍 Verifying $svc image..."
+        
+        # Check if image exists and is accessible
+        if ! docker pull "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"; then
+          echo "❌ Failed to pull $svc:$CI_COMMIT_SHA"
+          exit 1
+        fi
+        
+        # Verify image metadata
+        image_info=$(docker inspect "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA")
+        if ! echo "$image_info" | jq -e '.[0].Config.Cmd != null'; then
+          echo "❌ Invalid image metadata for $svc"
+          exit 1
+        fi
+        
+        echo "✅ $svc image verified successfully"
+      done
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
+      when: manual
 
 unit_tests:
   stage: test
-  services:
-    - name: redis:7-alpine
-      alias: redis
-    - name: nats:2.10.11-alpine
-      alias: nats
-      command: ["-js"]
+  image: golang:1.21
+  variables:
+    # Disable testcontainers for unit tests
+    TESTCONTAINERS_DISABLED: "true"
   script:
-    - for svc in amf smf ocs upf bss; do
-        cd $svc;
-        go mod tidy;
-        go test -v ./...;
-        cd ..;
+    - |
+      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
+        echo "🧪 Running unit tests for $svc..."
+        cd $svc
+        go mod tidy
+        go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        # Upload coverage report
+        curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN
+        cd ..
       done
+  coverage: '/coverage: \d+\.\d+% of statements/'
   artifacts:
     reports:
-      junit: junit-*.xml
-    when: always
+      coverage_report:
+        coverage_format: cobertura
+        path: "**/coverage.txt"
 
-integration_test:
-  stage: test
+integration_tests:
+  stage: integration-test
+  image: golang:1.21
+  services:
+    - name: docker:dind
+      alias: docker
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache docker-cli
+    - go install github.com/codecov/codecov-go@latest
   script:
-    # Start infrastructure services first
-    - docker-compose up -d redis nats
-    - sleep 5  # Wait for services to start
-    
-    # Export environment variables for docker-compose
-    - export SMF_PORT=$SMF_PORT
-    - export AMF_PORT=$AMF_PORT
-    - export OCS_PORT=$OCS_PORT
-    - export UDM_PORT=$UDM_PORT
-    - export BSS_PORT=$BSS_PORT
-    
-    # Start all services
-    - docker-compose up -d
-    
-    - sleep 10  # Wait for all services to start
-    
-    # Check health endpoints
     - |
-      for port in $AMF_PORT $OCS_PORT $UDM_PORT $BSS_PORT; do
-        echo "Checking health on port $port..."
-        curl -f http://localhost:$port/health || exit 1
+      for svc in imsi-manager imsi-switch-receiver; do
+        echo "🔍 Running integration tests for $svc..."
+        cd $svc
+        go mod tidy
+        go test -v -tags=integration -race -coverprofile=coverage.integration.txt -covermode=atomic ./...
+        # Upload integration coverage report
+        curl -s https://codecov.io/bash | bash -s -- -f coverage.integration.txt -t $CODECOV_TOKEN
+        cd ..
       done
-    
-    # Check SMF PFCP port with dynamic port
-    - |
-      echo "Checking SMF PFCP port $SMF_PORT..."
-      nc -z localhost $SMF_PORT || exit 1
-    
-    # Log the actual port being used
-    - echo "SMF is running on port $SMF_PORT"
-    - docker-compose logs
-  allow_failure: false
-  after_script:
-    - docker-compose down -v --remove-orphans
-    - docker ps -aq | xargs -r docker rm -f || true
-    - docker network prune -f || true
+  coverage: '/coverage: \d+\.\d+% of statements/'
   artifacts:
-    when: on_failure
-    paths:
-      - docker-compose.log
-
-push_images:
-  stage: push
-  script:
-    - |
-      for svc in amf smf ocs upf bss; do
-        echo "Pushing $svc..."
-        docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:latest"
-        docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
-        docker push "$CI_REGISTRY_IMAGE/$svc:latest"
-        docker push "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
-      done
-  only:
-    - main
-  when: manual
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: "**/coverage.integration.txt"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
+      when: manual
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
