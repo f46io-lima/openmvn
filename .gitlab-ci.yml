@@ -1,7 +1,7 @@
-image: docker:latest
+image: docker:24.0.2
 
 services:
-  - name: docker:dind
+  - name: docker:24.0.2-dind
     command: ["--tls=false"]
     alias: docker
 
