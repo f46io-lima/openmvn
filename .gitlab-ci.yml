@@ -9,6 +9,11 @@ variables:
   DOCKER_DRIVER: overlay2
   REDIS_ADDR: redis:6379
   NATS_URL: nats://nats:4222
+  SMF_PORT: 8805
+  AMF_PORT: 8081
+  OCS_PORT: 8082
+  UDM_PORT: 8083
+  BSS_PORT: 8084
 
 stages:
   - build
@@ -18,6 +23,8 @@ stages:
 before_script:
   - apk add --no-cache go git curl bash
   - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  - docker ps -aq | xargs -r docker rm -f || true
+  - docker network prune -f || true
 
 build_services:
   stage: build
@@ -53,17 +60,33 @@ integration_test:
   script:
     - docker-compose up -d redis nats
     - sleep 5  # Wait for services to start
-    - docker-compose up -d
-    - sleep 10  # Wait for all services to start
+    
     - |
-      for port in 8081 8082 8083 8084; do
+      docker-compose up -d \
+        -e SMF_PORT=$SMF_PORT \
+        -e AMF_PORT=$AMF_PORT \
+        -e OCS_PORT=$OCS_PORT \
+        -e UDM_PORT=$UDM_PORT \
+        -e BSS_PORT=$BSS_PORT
+    
+    - sleep 10  # Wait for all services to start
+    
+    - |
+      for port in $AMF_PORT $OCS_PORT $UDM_PORT $BSS_PORT; do
         echo "Checking health on port $port..."
         curl -f http://localhost:$port/health || exit 1
       done
+    
+    - |
+      echo "Checking SMF PFCP port $SMF_PORT..."
+      nc -z localhost $SMF_PORT || exit 1
+    
     - docker-compose logs
   allow_failure: false
   after_script:
-    - docker-compose down -v
+    - docker-compose down -v --remove-orphans
+    - docker ps -aq | xargs -r docker rm -f || true
+    - docker network prune -f || true
   artifacts:
     when: on_failure
     paths:

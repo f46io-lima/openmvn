@@ -8,16 +8,12 @@ services:
       dockerfile: Dockerfile
     container_name: openmvcore-amf
     ports:
-      - "38412:38412"  # NGAP
-      - "38413:38413"  # SCTP
+      - "${AMF_PORT:-8081}:8081"
     networks:
       - openmvcore-net
     depends_on:
-      - udm
+      - redis
       - nats
-    environment:
-      - NATS_URL=nats://nats:4222
-      - REDIS_ADDR=redis:6379
 
   smf:
     build:
@@ -25,17 +21,15 @@ services:
       dockerfile: Dockerfile
     container_name: openmvcore-smf
     ports:
-      - "8080:8080"  # HTTP API
-      - "8805:8805"  # PFCP
+      - "${SMF_PORT:-8805}:8805"
+      - "2123:2123"
     networks:
       - openmvcore-net
     depends_on:
+      - redis
+      - nats
       - upf
       - udm
-      - nats
-    environment:
-      - NATS_URL=nats://nats:4222
-      - REDIS_ADDR=redis:6379
 
   upf:
     build:
@@ -43,8 +37,7 @@ services:
       dockerfile: Dockerfile
     container_name: openmvcore-upf
     ports:
-      - "8805:8805"  # PFCP
-      - "2152:2152"  # GTP-U
+      - "8805:8805"
     cap_add:
       - NET_ADMIN
     devices:
@@ -52,10 +45,8 @@ services:
     networks:
       - openmvcore-net
     depends_on:
+      - redis
       - nats
-    environment:
-      - NATS_URL=nats://nats:4222
-      - REDIS_ADDR=redis:6379
 
   # Support Services
   bss:
@@ -64,16 +55,12 @@ services:
       dockerfile: Dockerfile
     container_name: openmvcore-bss
     ports:
-      - "8083:8083"  # HTTP API
+      - "${BSS_PORT:-8084}:8084"
     networks:
       - openmvcore-net
     depends_on:
-      - postgres
+      - redis
       - nats
-    environment:
-      - POSTGRES_DSN=postgres://openmv:openmv@postgres:5432/openmv?sslmode=disable
-      - NATS_URL=nats://nats:4222
-      - REDIS_ADDR=redis:6379
 
   ocs:
     build:
@@ -81,16 +68,12 @@ services:
       dockerfile: Dockerfile
     container_name: openmvcore-ocs
     ports:
-      - "8081:8081"  # HTTP API
+      - "${OCS_PORT:-8082}:8082"
     networks:
       - openmvcore-net
     depends_on:
       - redis
-      - postgres
       - nats
-    environment:
-      - REDIS_ADDR=redis:6379
-      - POSTGRES_DSN=postgres://openmv:openmv@postgres:5432/openmv?sslmode=disable
 
   udm:
     build:
@@ -98,13 +81,16 @@ services:
       dockerfile: Dockerfile
     container_name: openmvcore-udm
     ports:
-      - "8082:8082"  # HTTP API
+      - "${UDM_PORT:-8083}:8083"
     networks:
       - openmvcore-net
+    depends_on:
+      - redis
+      - nats
 
   # Infrastructure Services
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: openmvcore-redis
     ports:
       - "6379:6379"
@@ -112,6 +98,11 @@ services:
       - openmvcore-net
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
   postgres:
     image: postgres:13-alpine
@@ -129,14 +120,19 @@ services:
 
   # Optional: NATS for service communication
   nats:
-    image: nats:2.9-alpine
+    image: nats:2.10.11-alpine
     container_name: openmvcore-nats
     ports:
-      - "4222:4222"  # Client connections
-      - "8222:8222"  # HTTP monitoring
+      - "4222:4222"
+      - "8222:8222"
     networks:
       - openmvcore-net
     command: ["-js"]
+    healthcheck:
+      test: ["CMD", "nats-server", "--help"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
 volumes:
   redis_data:
