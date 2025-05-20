@@ -31,6 +31,7 @@ stages:
   - test
   - integration-test
   - push
+  - deploy
 
 before_script:
   # Install required packages
@@ -131,6 +132,48 @@ integration_tests:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: on_success
 
+kaniko_push:
+  image: gcr.io/kaniko-project/executor:latest
+  stage: push
+  variables:
+    DOCKER_BUILDKIT: 1
+    DOCKER_CLI_EXPERIMENTAL: enabled
+  before_script:
+    - echo "🔐 Authenticating Kaniko to Docker registry..."
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+  script:
+    - |
+      # Extract version from tag if available
+      VERSION=${CI_COMMIT_TAG:-$CI_COMMIT_SHA}
+      echo "📦 Building version: $VERSION"
+      
+      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
+        echo "📦 Pushing $svc with Kaniko..."
+        /kaniko/executor \
+          --context "$CI_PROJECT_DIR/$svc" \
+          --dockerfile "$CI_PROJECT_DIR/$svc/Dockerfile" \
+          --destination "$CI_REGISTRY_IMAGE/$svc:$VERSION" \
+          --destination "$CI_REGISTRY_IMAGE/$svc:latest" \
+          --cache=true \
+          --cache-ttl=24h \
+          --push-retry=3 \
+          --log-format=text \
+          --log-timestamp
+      done
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: on_success
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  after_script:
+    - echo "✅ Push completed for version: $VERSION"
+  artifacts:
+    reports:
+      dotenv: build.env
+    expire_in: 1 week
+    when: on_success
+
+# Keep the existing push_images job for backward compatibility
 push_images:
   stage: push
   script:
@@ -145,3 +188,4 @@ push_images:
   only:
     - main
   when: manual
+  allow_failure: true  # Allow this job to fail since we have kaniko_push
