@@ -58,25 +58,30 @@ unit_tests:
 integration_test:
   stage: test
   script:
+    # Start infrastructure services first
     - docker-compose up -d redis nats
     - sleep 5  # Wait for services to start
     
-    - |
-      docker-compose up -d \
-        -e SMF_PORT=$SMF_PORT \
-        -e AMF_PORT=$AMF_PORT \
-        -e OCS_PORT=$OCS_PORT \
-        -e UDM_PORT=$UDM_PORT \
-        -e BSS_PORT=$BSS_PORT
+    # Export environment variables for docker-compose
+    - export SMF_PORT=$SMF_PORT
+    - export AMF_PORT=$AMF_PORT
+    - export OCS_PORT=$OCS_PORT
+    - export UDM_PORT=$UDM_PORT
+    - export BSS_PORT=$BSS_PORT
+    
+    # Start all services
+    - docker-compose up -d
     
     - sleep 10  # Wait for all services to start
     
+    # Check health endpoints
     - |
       for port in $AMF_PORT $OCS_PORT $UDM_PORT $BSS_PORT; do
         echo "Checking health on port $port..."
         curl -f http://localhost:$port/health || exit 1
       done
     
+    # Check SMF PFCP port
     - |
       echo "Checking SMF PFCP port $SMF_PORT..."
       nc -z localhost $SMF_PORT || exit 1
