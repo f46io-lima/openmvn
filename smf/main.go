@@ -259,7 +259,12 @@ func main() {
 				logger.Error().Err(err).Msg("Failed to write response")
 			}
 
-			publisher.PublishPFCPCreated("sess-"+imsi, teid, ueIP)
+			// Publish PFCP session created event
+			publisher.PublishPFCPCreated(
+				fmt.Sprintf("%d", teid), // Convert teid (uint32) to string
+				ueIP.String(),           // Convert net.IP to string
+				"",                      // (or pass a valid session ID if available)
+			)
 
 			// After session creation
 			sessionJSON, err := json.Marshal(session)
