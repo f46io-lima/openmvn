@@ -211,11 +211,7 @@ push_images:
         docker push "$CI_REGISTRY_IMAGE/$svc:latest"
         docker push "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
       done
-  only:
-    - main
-  when: manual
-  allow_failure: true
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: manual
-      allow_failure: true
+  allow_failure: true
