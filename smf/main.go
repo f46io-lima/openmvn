@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -266,17 +265,8 @@ func main() {
 				"",                      // (or pass a valid session ID if available)
 			)
 
-			// After session creation
-			sessionJSON, err := json.Marshal(session)
-			if err != nil {
-				log.Printf("Failed to marshal session: %v", err)
-			} else {
-				// Store session in Redis with 30 minute expiry
-				err = RedisClient.Set(RedisCtx, "session:"+imsi, sessionJSON, 30*time.Minute).Err()
-				if err != nil {
-					log.Printf("Failed to store session in Redis: %v", err)
-				}
-			}
+			// TODO: Store session details in Redis if needed
+			// For now, we'll skip storing session details until we have a session struct defined
 
 			return
 		}
