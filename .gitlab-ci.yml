@@ -1,15 +1,23 @@
 image: docker:24.0.2
 
 services:
-  - docker:24.0.2-dind
+  - name: docker:24.0.2-dind
+    command: ["--tls=false"]
+    alias: docker
 
 variables:
+  # Use tcp://docker:2376 for TLS or tcp://docker:2375 for non-TLS
   DOCKER_HOST: tcp://docker:2375
-  DOCKER_TLS_CERTDIR: ""
+  DOCKER_TLS_CERTDIR: ""  # Disable TLS
   DOCKER_DRIVER: overlay2
+  # Add these to help with DinD setup
+  DOCKER_BUILDKIT: 1
+  DOCKER_CLI_EXPERIMENTAL: enabled
+  # Service variables
   REDIS_ADDR: redis:6379
   NATS_URL: nats://nats:4222
-  SMF_PORT: 8805
+  # Use dynamic port for SMF to avoid conflicts
+  SMF_PORT: ${SMF_PORT:-8805}
   AMF_PORT: 8081
   OCS_PORT: 8082
   UDM_PORT: 8083
@@ -21,8 +29,32 @@ stages:
   - push
 
 before_script:
+  # Install required packages
   - apk add --no-cache go git curl bash
-  - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  # Generate random port for SMF if not set
+  - |
+    if [ -z "$SMF_PORT" ]; then
+      # Generate a random port between 10000 and 65000
+      export SMF_PORT=$(( (RANDOM % 55000) + 10000 ))
+      echo "Using dynamic SMF port: $SMF_PORT"
+    fi
+  # Wait for Docker daemon to be ready
+  - |
+    for i in $(seq 1 30); do
+      if docker info > /dev/null 2>&1; then
+        break
+      fi
+      echo "Waiting for Docker daemon... attempt $i"
+      sleep 2
+    done
+  # Login to registry only if credentials are available
+  - |
+    if [ -n "$CI_REGISTRY_PASSWORD" ] && [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY" ]; then
+      echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    else
+      echo "Skipping registry login - credentials not available"
+    fi
+  # Cleanup
   - docker ps -aq | xargs -r docker rm -f || true
   - docker network prune -f || true
 
@@ -81,11 +113,13 @@ integration_test:
         curl -f http://localhost:$port/health || exit 1
       done
     
-    # Check SMF PFCP port
+    # Check SMF PFCP port with dynamic port
     - |
       echo "Checking SMF PFCP port $SMF_PORT..."
       nc -z localhost $SMF_PORT || exit 1
     
+    # Log the actual port being used
+    - echo "SMF is running on port $SMF_PORT"
     - docker-compose logs
   allow_failure: false
   after_script:
