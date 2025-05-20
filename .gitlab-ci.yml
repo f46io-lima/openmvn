@@ -64,7 +64,7 @@ before_script:
 build_services:
   stage: build
   script:
-    - docker-compose build --parallel
+    - docker-compose build
   artifacts:
     paths:
       - ./*/Dockerfile
