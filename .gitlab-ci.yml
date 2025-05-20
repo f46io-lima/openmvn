@@ -6,74 +6,92 @@ services:
     alias: docker
 
 variables:
-  # Use tcp://docker:2376 for TLS or tcp://docker:2375 for non-TLS
+  # Docker settings
   DOCKER_HOST: tcp://docker:2375
-  DOCKER_TLS_CERTDIR: ""  # Disable TLS
+  DOCKER_TLS_CERTDIR: ""
   DOCKER_DRIVER: overlay2
-  # Add these to help with DinD setup
   DOCKER_BUILDKIT: 1
   DOCKER_CLI_EXPERIMENTAL: enabled
-  # Service variables
+  # Service endpoints
   REDIS_ADDR: redis:6379
   NATS_URL: nats://nats:4222
-  # Use dynamic port for SMF to avoid conflicts
+  # Dynamic port allocation
   SMF_PORT: ${SMF_PORT:-8805}
   AMF_PORT: 8081
   OCS_PORT: 8082
   UDM_PORT: 8083
   BSS_PORT: 8084
-  # Testcontainers settings
+  # Testcontainers
   TESTCONTAINERS_RYUK_DISABLED: "true"
   TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/var/run/docker.sock"
+  # Build settings
+  GO_VERSION: "1.21"
+  GO_TEST_FLAGS: "-v -race -coverprofile=coverage.txt -covermode=atomic"
+  GO_TEST_TIMEOUT: "10m"
 
 stages:
+  - validate
   - build
   - test
   - integration-test
   - push
   - deploy
 
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
+    - if: $CI_COMMIT_MESSAGE =~ /^chore\(release\):/
+
 before_script:
-  # Install required packages
   - apk add --no-cache go git curl bash
-  # Generate random port for SMF if not set
   - |
     if [ -z "$SMF_PORT" ]; then
-      # Generate a random port between 10000 and 65000
       export SMF_PORT=$(( (RANDOM % 55000) + 10000 ))
       echo "Using dynamic SMF port: $SMF_PORT"
     fi
-  # Wait for Docker daemon to be ready
   - |
-    for i in $(seq 1 30); do
-      if docker info > /dev/null 2>&1; then
-        break
+    if [[ "$CI_JOB_STAGE" =~ ^(build|push|integration-test)$ ]]; then
+      if [ -n "$CI_REGISTRY_PASSWORD" ] && [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY" ]; then
+        echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+      else
+        echo "Skipping Docker login – no credentials available"
+        exit 1
       fi
-      echo "Waiting for Docker daemon... attempt $i"
-      sleep 2
-    done
-  # Login to registry only if credentials are available
-  - |
-    if [ -n "$CI_REGISTRY_PASSWORD" ] && [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY" ]; then
-      echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    else
-      echo "Skipping registry login - credentials not available"
     fi
-  # Cleanup
   - docker ps -aq | xargs -r docker rm -f || true
   - docker network prune -f || true
+
+validate:
+  stage: validate
+  image: golang:$GO_VERSION
+  script:
+    - go mod verify
+    - go mod tidy
+    - go vet ./...
+    - go fmt ./...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 build_services:
   stage: build
   script:
-    - docker-compose build
+    - docker-compose build --parallel
   artifacts:
     paths:
       - ./*/Dockerfile
       - docker-compose.yml
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
 
 unit_tests:
   stage: test
+  image: golang:$GO_VERSION
   services:
     - name: redis:7-alpine
       alias: redis
@@ -83,11 +101,13 @@ unit_tests:
   script:
     - |
       for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
+        echo "🧪 Testing $svc..."
         cd $svc
         go mod tidy
-        go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-        # Upload coverage report
-        curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN
+        go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
+        if [ -f coverage.txt ]; then
+          curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN
+        fi
         cd ..
       done
   coverage: '/coverage: \d+\.\d+% of statements/'
@@ -96,10 +116,14 @@ unit_tests:
       coverage_report:
         coverage_format: cobertura
         path: "**/coverage.txt"
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 integration_tests:
   stage: integration-test
-  image: golang:1.21
+  image: golang:$GO_VERSION
   services:
     - name: docker:dind
       alias: docker
@@ -114,9 +138,10 @@ integration_tests:
     - |
       cd integration_test
       go mod tidy
-      go test -v -race -coverprofile=coverage.integration.txt -covermode=atomic ./...
-      # Upload integration coverage report
-      curl -s https://codecov.io/bash | bash -s -- -f coverage.integration.txt -t $CODECOV_TOKEN
+      go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
+      if [ -f coverage.integration.txt ]; then
+        curl -s https://codecov.io/bash | bash -s -- -f coverage.integration.txt -t $CODECOV_TOKEN
+      fi
   coverage: '/coverage: \d+\.\d+% of statements/'
   artifacts:
     reports:
@@ -126,6 +151,7 @@ integration_tests:
     when: on_failure
     paths:
       - integration_test/*.log
+    expire_in: 1 week
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request"
       when: manual
@@ -136,6 +162,7 @@ kaniko_push:
   image: gcr.io/kaniko-project/executor:latest
   stage: push
   variables:
+    VERSION: "${CI_COMMIT_TAG:-$CI_COMMIT_SHA}"
     DOCKER_BUILDKIT: 1
     DOCKER_CLI_EXPERIMENTAL: enabled
   before_script:
@@ -143,10 +170,7 @@ kaniko_push:
     - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
   script:
     - |
-      # Extract version from tag if available
-      VERSION=${CI_COMMIT_TAG:-$CI_COMMIT_SHA}
       echo "📦 Building version: $VERSION"
-      
       for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
         echo "📦 Pushing $svc with Kaniko..."
         /kaniko/executor \
@@ -158,22 +182,24 @@ kaniko_push:
           --cache-ttl=24h \
           --push-retry=3 \
           --log-format=text \
-          --log-timestamp
+          --log-timestamp \
+          --skip-tls-verify=false \
+          --insecure=false
       done
+  after_script:
+    - 'echo "✅ Push completed for version: $VERSION"'
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
       when: on_success
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
-  after_script:
-    - 'echo "✅ Push completed for version: $VERSION"'
   artifacts:
     reports:
       dotenv: build.env
     expire_in: 1 week
     when: on_success
 
-# Keep the existing push_images job for backward compatibility
+# Legacy push job - to be removed after migration
 push_images:
   stage: push
   script:
@@ -188,4 +214,8 @@ push_images:
   only:
     - main
   when: manual
-  allow_failure: true  # Allow this job to fail since we have kaniko_push
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
