@@ -50,7 +50,7 @@ before_script:
       echo "Using dynamic SMF port: $SMF_PORT"
     fi
   - |
-    if [[ "$CI_JOB_STAGE" =~ ^(build|push|integration-test)$ ]]; then
+    if [ "$CI_JOB_STAGE" = "build" ] || [ "$CI_JOB_STAGE" = "push" ] || [ "$CI_JOB_NAME" = "integration_tests" ]; then
       if [ -n "$CI_REGISTRY_PASSWORD" ] && [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY" ]; then
         echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
       else
