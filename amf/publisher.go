@@ -32,11 +32,7 @@ func (p *Publisher) PublishQuotaDeducted(imsi string, deducted, remaining int) {
 		return
 	}
 
-	if err := p.nc.Publish("quota.deducted", data); err != nil {
-		log.Printf("❌ Failed to publish quota deduction event: %v", err)
-		return
-	}
-
+	p.nc.Publish("quota.deducted", data)
 	log.Printf("✅ Published quota deduction event for IMSI %s (deducted: %d, remaining: %d)", imsi, deducted, remaining)
 }
 
@@ -67,8 +63,5 @@ func (p *Publisher) publish(subject string, msg any) {
 		log.Printf("[Publisher] Marshal error: %v", err)
 		return
 	}
-	_, err = p.nc.Publish(subject, bytes)
-	if err != nil {
-		log.Printf("[Publisher] Failed to publish %s: %v", subject, err)
-	}
+	p.nc.Publish(subject, bytes)
 }
