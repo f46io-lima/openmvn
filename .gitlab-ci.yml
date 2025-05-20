@@ -80,13 +80,14 @@ unit_tests:
       alias: nats
       command: ["-js"]
   script:
-    - for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
-        cd $svc;
-        go mod tidy;
-        go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...;
+    - |
+      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
+        cd $svc
+        go mod tidy
+        go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
         # Upload coverage report
-        curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN;
-        cd ..;
+        curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN
+        cd ..
       done
   coverage: '/coverage: \d+\.\d+% of statements/'
   artifacts:
