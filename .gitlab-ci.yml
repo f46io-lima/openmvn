@@ -88,12 +88,28 @@ unit_tests:
     - |
       echo "🧪 Running unit tests for all services..."
       FAILED=0
+      
+      # First ensure go.work is properly set up
+      if [ -f "go.work" ]; then
+        echo "📦 Using existing go.work file"
+      else
+        echo "📦 Creating go.work file..."
+        go work init
+        for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
+          if [ -d "$svc" ]; then
+            go work use ./$svc
+          fi
+        done
+      fi
+      
+      # Run tests for each service
       for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
         if [ -d "$svc" ]; then
           echo "🔍 Testing $svc..."
           cd $svc
           go mod tidy
-          if ! go test -v ./... | tee test_output.log; then
+          # Use go test with workspace-aware flags
+          if ! go test -v -workfile=../go.work ./... | tee test_output.log; then
             echo "❌ Tests failed in $svc"
             FAILED=1
           fi
@@ -102,11 +118,20 @@ unit_tests:
           echo "⚠️ Skipping $svc - directory not found"
         fi
       done
+      
+      # Verify workspace setup
+      echo "📋 Workspace modules:"
+      go work edit -json | jq -r '.Use[].DiskPath' || true
+      
       exit $FAILED
+  before_script:
+    - apk add --no-cache jq
   artifacts:
     when: always
     paths:
       - "**/test_output.log"
+      - "go.work"
+      - "go.work.sum"
     expire_in: 1 week
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
