@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -40,12 +41,13 @@ func TestRedisPFCPStorage(t *testing.T) {
 	tunnelJSON, err := json.Marshal(tunnel)
 	assert.NoError(t, err)
 
-	// Store in Redis
-	err = RedisClient.Set(RedisCtx, "pfcp:"+string(tunnel.TEID), tunnelJSON, 30*time.Minute).Err()
+	// Store in Redis with proper string conversion
+	redisKey := fmt.Sprintf("pfcp:%d", tunnel.TEID)
+	err = RedisClient.Set(RedisCtx, redisKey, tunnelJSON, 30*time.Minute).Err()
 	assert.NoError(t, err)
 
 	// Retrieve from Redis
-	val, err := RedisClient.Get(RedisCtx, "pfcp:"+string(tunnel.TEID)).Result()
+	val, err := RedisClient.Get(RedisCtx, redisKey).Result()
 	assert.NoError(t, err)
 
 	// Unmarshal and verify
