@@ -86,30 +86,21 @@ unit_tests:
       command: ["-js"]
   script:
     - |
-      echo "CODECOV_TOKEN: $CODECOV_TOKEN"
+      echo "🧪 Running unit tests for all services..."
       for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
-        echo "🧪 Testing $svc..."
+        echo "🔍 Testing $svc..."
         cd $svc
         go mod tidy
-        go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
-        if [ -f coverage.txt ] && [ -n "$CODECOV_TOKEN" ]; then
-          echo "📡 Uploading coverage for $svc..."
-          bash <(curl -s https://codecov.io/bash) -f coverage.txt -t "$CODECOV_TOKEN" -r "bhaetech/Telco/openmvcore"
-        else
-          echo "⚠️  Skipping Codecov upload for $svc (missing coverage.txt or CODECOV_TOKEN)"
-        fi
+        go test -v ./... | tee test_output.log
         cd ..
       done
-  coverage: '/coverage: \d+\.\d+% of statements/'
   artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: "**/coverage.txt"
-    expire_in: 1 week
+    when: always
+    paths:
+      - "**/test_output.log"
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request"
 
 integration_tests:
   stage: integration-test
