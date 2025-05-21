@@ -87,17 +87,27 @@ unit_tests:
   script:
     - |
       echo "🧪 Running unit tests for all services..."
-      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
-        echo "🔍 Testing $svc..."
-        cd $svc
-        go mod tidy
-        go test -v ./... | tee test_output.log
-        cd ..
+      FAILED=0
+      for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
+        if [ -d "$svc" ]; then
+          echo "🔍 Testing $svc..."
+          cd $svc
+          go mod tidy
+          if ! go test -v ./... | tee test_output.log; then
+            echo "❌ Tests failed in $svc"
+            FAILED=1
+          fi
+          cd ..
+        else
+          echo "⚠️ Skipping $svc - directory not found"
+        fi
       done
+      exit $FAILED
   artifacts:
     when: always
     paths:
       - "**/test_output.log"
+    expire_in: 1 week
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "merge_request"
@@ -152,20 +162,24 @@ kaniko_push:
   script:
     - |
       echo "📦 Building version: $VERSION"
-      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
-        echo "📦 Pushing $svc with Kaniko..."
-        /kaniko/executor \
-          --context "$CI_PROJECT_DIR/$svc" \
-          --dockerfile "$CI_PROJECT_DIR/$svc/Dockerfile" \
-          --destination "$CI_REGISTRY_IMAGE/$svc:$VERSION" \
-          --destination "$CI_REGISTRY_IMAGE/$svc:latest" \
-          --cache=true \
-          --cache-ttl=24h \
-          --push-retry=3 \
-          --log-format=text \
-          --log-timestamp \
-          --skip-tls-verify=false \
-          --insecure=false
+      for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
+        if [ -d "$CI_PROJECT_DIR/$svc" ]; then
+          echo "📦 Pushing $svc with Kaniko..."
+          /kaniko/executor \
+            --context "$CI_PROJECT_DIR/$svc" \
+            --dockerfile "$CI_PROJECT_DIR/$svc/Dockerfile" \
+            --destination "$CI_REGISTRY_IMAGE/$svc:$VERSION" \
+            --destination "$CI_REGISTRY_IMAGE/$svc:latest" \
+            --cache=true \
+            --cache-ttl=24h \
+            --push-retry=3 \
+            --log-format=text \
+            --log-timestamp \
+            --skip-tls-verify=false \
+            --insecure=false
+        else
+          echo "⚠️ Skipping $svc - directory not found"
+        fi
       done
   after_script:
     - 'echo "✅ Push completed for version: $VERSION"'
@@ -185,12 +199,16 @@ push_images:
   stage: push
   script:
     - |
-      for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
-        echo "Pushing $svc..."
-        docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:latest"
-        docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
-        docker push "$CI_REGISTRY_IMAGE/$svc:latest"
-        docker push "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
+      for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
+        if [ -d "$svc" ]; then
+          echo "Pushing $svc..."
+          docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:latest"
+          docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
+          docker push "$CI_REGISTRY_IMAGE/$svc:latest"
+          docker push "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
+        else
+          echo "⚠️ Skipping $svc - directory not found"
+        fi
       done
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
