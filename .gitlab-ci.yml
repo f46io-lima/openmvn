@@ -85,8 +85,8 @@ unit_tests:
       alias: nats
       command: ["-js"]
   script:
-    - echo "CODECOV_TOKEN: $CODECOV_TOKEN"
     - |
+      echo "CODECOV_TOKEN: $CODECOV_TOKEN"
       for svc in amf smf ocs upf bss imsi-manager imsi-switch-receiver; do
         echo "🧪 Testing $svc..."
         cd $svc
