@@ -93,7 +93,7 @@ unit_tests:
         go mod tidy
         go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
         if [ -f coverage.txt ]; then
-          curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN
+          curl -s https://codecov.io/bash | bash -s -- -f coverage.txt -t $CODECOV_TOKEN -r "bhaetech/Telco/openmvcore"
         fi
         cd ..
       done
