@@ -92,9 +92,17 @@ unit_tests:
       # First ensure go.work is properly set up
       if [ -f "go.work" ]; then
         echo "📦 Using existing go.work file"
+        # Add current directory if not already in workspace
+        if ! go work edit -json | jq -r '.Use[].DiskPath' | grep -q "^\.$"; then
+          echo "📦 Adding current directory to workspace..."
+          go work use .
+        fi
       else
         echo "📦 Creating go.work file..."
         go work init
+        # Add current directory first
+        go work use .
+        # Then add all service modules
         for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
           if [ -d "$svc" ]; then
             go work use ./$svc
@@ -108,8 +116,8 @@ unit_tests:
           echo "🔍 Testing $svc..."
           cd $svc
           go mod tidy
-          # Use go test with workspace-aware flags
-          if ! go test -v -workfile=../go.work ./... | tee test_output.log; then
+          # Use go test with workspace-aware flags and current directory
+          if ! (cd .. && go test -v -workfile=go.work ./$svc/... | tee $svc/test_output.log); then
             echo "❌ Tests failed in $svc"
             FAILED=1
           fi
