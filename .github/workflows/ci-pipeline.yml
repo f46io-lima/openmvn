@@ -10,8 +10,6 @@ on:
 env:
   DOCKER_BUILDKIT: 1
   DOCKER_CLI_EXPERIMENTAL: enabled
-  DOCKER_HOST: tcp://localhost:2375
-  DOCKER_TLS_CERTDIR: ""
   REDIS_ADDR: redis:6379
   NATS_URL: nats://nats:4222
   TESTCONTAINERS_RYUK_DISABLED: true
@@ -23,10 +21,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:24.0.2-dind
-        options: --privileged
     steps:
       - uses: actions/checkout@v3
       - name: Set up Docker Buildx
@@ -89,10 +83,6 @@ jobs:
 
   integration_tests:
     runs-on: ubuntu-latest
-    services:
-      docker:
-        image: docker:24.0.2-dind
-        options: --privileged
     steps:
       - uses: actions/checkout@v3
       - name: Set up Go
