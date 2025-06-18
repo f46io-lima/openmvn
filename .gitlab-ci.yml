@@ -1,249 +1,129 @@
-image: docker:24.0.2
+name: CI Pipeline
 
-services:
-  - name: docker:24.0.2-dind
-    command: ["--tls=false"]
-    alias: docker
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
 
-variables:
-  # Docker settings
-  DOCKER_HOST: tcp://docker:2375
-  DOCKER_TLS_CERTDIR: ""
-  DOCKER_DRIVER: overlay2
+env:
   DOCKER_BUILDKIT: 1
   DOCKER_CLI_EXPERIMENTAL: enabled
-  # Service endpoints
+  DOCKER_HOST: tcp://localhost:2375
+  DOCKER_TLS_CERTDIR: ""
   REDIS_ADDR: redis:6379
   NATS_URL: nats://nats:4222
-  # Dynamic port allocation
-  SMF_PORT: ${SMF_PORT:-8805}
-  AMF_PORT: 8081
-  OCS_PORT: 8082
-  UDM_PORT: 8083
-  BSS_PORT: 8084
-  # Testcontainers
-  TESTCONTAINERS_RYUK_DISABLED: "true"
+  TESTCONTAINERS_RYUK_DISABLED: true
   TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: "/var/run/docker.sock"
-  # Build settings
-  GO_VERSION: "1.21"
+  GO_VERSION: '1.21'
   GO_TEST_FLAGS: "-v -race -coverprofile=coverage.txt -covermode=atomic"
   GO_TEST_TIMEOUT: "10m"
 
-stages:
-  - build
-  - test
-  - integration-test
-  - push
-  - deploy
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:24.0.2-dind
+        options: --privileged
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y docker-compose
+      - name: Docker Compose Build
+        run: docker-compose build
 
-workflow:
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "merge_request"
-
-before_script:
-  - apk add --no-cache go git curl bash
-  - |
-    if [ -z "$SMF_PORT" ]; then
-      export SMF_PORT=$(( (RANDOM % 55000) + 10000 ))
-      echo "Using dynamic SMF port: $SMF_PORT"
-    fi
-  - |
-    if [ "$CI_JOB_STAGE" = "build" ] || [ "$CI_JOB_STAGE" = "push" ] || [ "$CI_JOB_NAME" = "integration_tests" ]; then
-      if [ -n "$CI_REGISTRY_PASSWORD" ] && [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY" ]; then
-        echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-      else
-        echo "Skipping Docker login – no credentials available"
-        exit 1
-      fi
-    fi
-  - docker ps -aq | xargs -r docker rm -f || true
-  - docker network prune -f || true
-
-build_services:
-  stage: build
-  script:
-    - docker-compose build
-  artifacts:
-    paths:
-      - ./*/Dockerfile
-      - docker-compose.yml
-    expire_in: 1 week
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "merge_request"
-
-unit_tests:
-  stage: test
-  image: golang:$GO_VERSION-alpine
-  services:
-    - name: redis:7-alpine
-      alias: redis
-    - name: nats:2.10.11-alpine
-      alias: nats
-      command: ["-js"]
-  script:
-    - |
-      echo "🧪 Running unit tests for all services..."
-      FAILED=0
-      
-      # First ensure go.work is properly set up
-      if [ -f "go.work" ]; then
-        echo "📦 Using existing go.work file"
-        # Add current directory if not already in workspace
-        if ! go work edit -json | jq -r '.Use[].DiskPath' | grep -q "^\.$"; then
-          echo "📦 Adding current directory to workspace..."
-          go work use .
-        fi
-      else
-        echo "📦 Creating go.work file..."
-        go work init
-        # Add current directory first
-        go work use .
-        # Then add all service modules
-        for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
-          if [ -d "$svc" ]; then
-            go work use ./$svc
+  unit_tests:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      nats:
+        image: nats:2.10.11-alpine
+        options: >
+          --health-cmd "nats-server -js"
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Run Unit Tests
+        run: |
+          set -e
+          if [ ! -f go.work ]; then
+            go work init
+            go work use .
+            for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
+              if [ -d "$svc" ]; then
+                go work use ./$svc
+              fi
+            done
           fi
-        done
-      fi
-      
-      # Run tests for each service
-      for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
-        if [ -d "$svc" ]; then
-          echo "🔍 Testing $svc..."
-          cd $svc
+          FAILED=0
+          for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
+            if [ -d "$svc" ]; then
+              echo "Testing $svc..."
+              cd $svc
+              go mod tidy
+              if ! (cd .. && go test $GO_TEST_FLAGS ./$svc/... | tee $svc/test_output.log); then
+                echo "Tests failed in $svc"
+                FAILED=1
+              fi
+              cd ..
+            fi
+          done
+          exit $FAILED
+      - name: Upload Test Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-logs
+          path: '**/test_output.log'
+
+  integration_tests:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:24.0.2-dind
+        options: --privileged
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install docker CLI and codecov
+        run: |
+          sudo apt-get update && sudo apt-get install -y docker.io
+          go install github.com/codecov/codecov-go@latest
+      - name: Run Integration Tests
+        run: |
+          cd integration_test
           go mod tidy
-          # Use go test with workspace-aware flags and current directory
-          if ! (cd .. && go test -v -workfile=go.work ./$svc/... | tee $svc/test_output.log); then
-            echo "❌ Tests failed in $svc"
-            FAILED=1
-          fi
-          cd ..
-        else
-          echo "⚠️ Skipping $svc - directory not found"
-        fi
-      done
-      
-      # Verify workspace setup
-      echo "📋 Workspace modules:"
-      go work edit -json | jq -r '.Use[].DiskPath' || true
-      
-      exit $FAILED
-  before_script:
-    - apk add --no-cache jq
-  artifacts:
-    when: always
-    paths:
-      - "**/test_output.log"
-      - "go.work"
-      - "go.work.sum"
-    expire_in: 1 week
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "merge_request"
+          go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
+          if [ -f coverage.integration.txt ]; then
+            bash <(curl -s https://codecov.io/bash) -f coverage.integration.txt -t ${{ secrets.CODECOV_TOKEN }}
 
-integration_tests:
-  stage: integration-test
-  image: golang:$GO_VERSION-alpine
-  services:
-    - name: docker:dind
-      alias: docker
-      command: ["--tls=false"]
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-  before_script:
-    - apk add --no-cache docker-cli
-    - go install github.com/codecov/codecov-go@latest
-  script:
-    - |
-      cd integration_test
-      go mod tidy
-      go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
-      if [ -f coverage.integration.txt ]; then
-        curl -s https://codecov.io/bash | bash -s -- -f coverage.integration.txt -t $CODECOV_TOKEN
-      fi
-  coverage: '/coverage: \d+\.\d+% of statements/'
-  artifacts:
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: "**/coverage.integration.txt"
-    when: on_failure
-    paths:
-      - integration_test/*.log
-    expire_in: 1 week
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request"
-      when: manual
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: on_success
-
-kaniko_push:
-  image: gcr.io/kaniko-project/executor:latest
-  stage: push
-  variables:
-    VERSION: "${CI_COMMIT_TAG:-$CI_COMMIT_SHA}"
-    DOCKER_BUILDKIT: 1
-    DOCKER_CLI_EXPERIMENTAL: enabled
-  before_script:
-    - echo "🔐 Authenticating Kaniko to Docker registry..."
-    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
-  script:
-    - |
-      echo "📦 Building version: $VERSION"
-      for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
-        if [ -d "$CI_PROJECT_DIR/$svc" ]; then
-          echo "📦 Pushing $svc with Kaniko..."
-          /kaniko/executor \
-            --context "$CI_PROJECT_DIR/$svc" \
-            --dockerfile "$CI_PROJECT_DIR/$svc/Dockerfile" \
-            --destination "$CI_REGISTRY_IMAGE/$svc:$VERSION" \
-            --destination "$CI_REGISTRY_IMAGE/$svc:latest" \
-            --cache=true \
-            --cache-ttl=24h \
-            --push-retry=3 \
-            --log-format=text \
-            --log-timestamp \
-            --skip-tls-verify=false \
-            --insecure=false
-        else
-          echo "⚠️ Skipping $svc - directory not found"
-        fi
-      done
-  after_script:
-    - 'echo "✅ Push completed for version: $VERSION"'
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-      when: on_success
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
-  artifacts:
-    reports:
-      dotenv: build.env
-    expire_in: 1 week
-    when: on_success
-
-# Legacy push job - to be removed after migration
-push_images:
-  stage: push
-  script:
-    - |
-      for svc in amf smf ocs upf bss udm imsi-switch-receiver gnb-sim; do
-        if [ -d "$svc" ]; then
-          echo "Pushing $svc..."
-          docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:latest"
-          docker tag openmvcore_$svc "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
-          docker push "$CI_REGISTRY_IMAGE/$svc:latest"
-          docker push "$CI_REGISTRY_IMAGE/$svc:$CI_COMMIT_SHA"
-        else
-          echo "⚠️ Skipping $svc - directory not found"
-        fi
-      done
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-      when: manual
-  allow_failure: true
+  kaniko_push:
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Authenticate Kaniko
+        run: |
+          echo "{\"auths\":{\"${{ secrets.DOCKER_REGISTRY }}\":{\"username\":\"${{ secrets.DOCKER_USERNAME }}\",\"password\":\"${{ secrets.DOCKER_PASSWORD }}\"}}}" > /kaniko/.docker/config.json
+      - name: Kaniko Build and Push
+        uses: aevea/action-kaniko@v0.9.0
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          dockerfile: Dockerfile
+          context: .
+          image: ${{ github.repository }}
+          tags: latest,${{ github.sha }}
