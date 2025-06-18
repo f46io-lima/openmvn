@@ -101,30 +101,8 @@ jobs:
         run: |
           cd integration_test
           go mod tidy
+          go get github.com/free5gc/go-upf@latest
+          go mod tidy
           go test $GO_TEST_FLAGS -timeout $GO_TEST_TIMEOUT ./...
           if [ -f coverage.integration.txt ]; then
             codecov -f coverage.integration.txt -t ${{ secrets.CODECOV_TOKEN }}
-
-  kaniko_push:
-    runs-on: ubuntu-latest
-    container:
-      image: gcr.io/kaniko-project/executor:latest
-      options: --entrypoint=""
-    if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Create Docker config
-        run: |
-          mkdir -p /kaniko/.docker
-          echo '{"auths":{"${{ secrets.DOCKER_REGISTRY }}":{"username":"${{ secrets.DOCKER_USERNAME }}","password":"${{ secrets.DOCKER_PASSWORD }}"}}}' > /kaniko/.docker/config.json
-
-      - name: Kaniko build and push
-        run: |
-          /kaniko/executor \
-            --dockerfile=Dockerfile \
-            --context=dir://$(pwd) \
-            --destination=${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:latest \
-            --destination=${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }} \
-            --cache=true
