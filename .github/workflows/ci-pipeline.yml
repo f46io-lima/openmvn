@@ -39,8 +39,8 @@ jobs:
           - 6379:6379
       nats:
         image: nats:2.10.11-alpine
-        options: >
-          --health-cmd "nats-server -js"
+        ports:
+          - 4222:4222
     steps:
       - uses: actions/checkout@v3
       - name: Set up Go
@@ -89,9 +89,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - name: Install docker CLI and codecov
+      - name: Install Docker CLI and Codecov
         run: |
-          sudo apt-get update && sudo apt-get install -y docker.io
+          sudo apt-get update
+          sudo apt-get remove -y containerd docker docker-engine docker.io containerd.io runc || true
+          sudo apt-get install -y docker.io
           go install github.com/codecov/codecov-go@latest
       - name: Run Integration Tests
         run: |
@@ -103,17 +105,24 @@ jobs:
 
   kaniko_push:
     runs-on: ubuntu-latest
+    container:
+      image: gcr.io/kaniko-project/executor:latest
+      options: --entrypoint=""
     if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
     steps:
-      - uses: actions/checkout@v3
-      - name: Authenticate Kaniko
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Create Docker config
         run: |
-          echo "{\"auths\":{\"${{ secrets.DOCKER_REGISTRY }}\":{\"username\":\"${{ secrets.DOCKER_USERNAME }}\",\"password\":\"${{ secrets.DOCKER_PASSWORD }}\"}}}" > /kaniko/.docker/config.json
-      - name: Kaniko Build and Push
-        uses: aevea/action-kaniko@v0.9.0
-        with:
-          registry: ${{ secrets.DOCKER_REGISTRY }}
-          dockerfile: Dockerfile
-          context: .
-          image: ${{ github.repository }}
-          tags: latest,${{ github.sha }}
+          mkdir -p /kaniko/.docker
+          echo '{"auths":{"${{ secrets.DOCKER_REGISTRY }}":{"username":"${{ secrets.DOCKER_USERNAME }}","password":"${{ secrets.DOCKER_PASSWORD }}"}}}' > /kaniko/.docker/config.json
+
+      - name: Kaniko build and push
+        run: |
+          /kaniko/executor \
+            --dockerfile=Dockerfile \
+            --context=dir://$(pwd) \
+            --destination=${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:latest \
+            --destination=${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }} \
+            --cache=true
