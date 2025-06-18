@@ -94,7 +94,8 @@ jobs:
           sudo apt-get update
           sudo apt-get remove -y containerd docker docker-engine docker.io containerd.io runc || true
           sudo apt-get install -y docker.io
-          go install github.com/codecov/codecov-go@latest
+          # use "go install" with version to avoid GitHub auth prompt
+          go install github.com/codecov/codecov-go@v2.1.0
       - name: Run Integration Tests
         run: |
           cd integration_test
